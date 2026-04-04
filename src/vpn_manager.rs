@@ -1,64 +1,99 @@
-use crate::{ConnectionStatus, ServerConfig};
-use dirs;
-use std::{fs, io, process::Command};
+use crate::ConnectionStatus;
+// use dirs;
+use secrecy::{ExposeSecret, SecretString};
+use std::io::Write;
+use std::{
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 pub struct VpnManager;
 
 impl VpnManager {
-    pub fn new() -> Self {
-        VpnManager
-    }
+    pub fn connect(path: PathBuf, password: &SecretString) -> ConnectionStatus {
+        let Ok(mut child) = Command::new("sudo")
+            .args([
+                "-S",
+                "-p",
+                "",
+                "awg-quick",
+                "up",
+                path.to_str().expect("Not valid path!"),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        else {
+            return ConnectionStatus::Disconnected;
+        };
 
-    pub fn connect(name: &str) -> ConnectionStatus {
-        let output = Command::new("sudo")
-            .args(["awg-quick", "up", name])
-            .output()
-            .expect("Something went wrong!");
-        if output.status.success() {
-            ConnectionStatus::Connected(format!("Connected to {}", name))
-        } else {
-            let error = String::from_utf8_lossy(&output.stderr).to_string();
-            panic!("{}", error)
+        if let Some(mut stdin) = child.stdin.take() {
+            if writeln!(stdin, "{}", password.expose_secret()).is_err() {
+                return ConnectionStatus::Disconnected;
+            }
+        }
+
+        match child.wait_with_output() {
+            Ok(output) if output.status.success() => ConnectionStatus::Connected,
+            _ => ConnectionStatus::Disconnected,
         }
     }
-    pub fn disconnect(name: &str) -> ConnectionStatus {
-        let output = Command::new("sudo")
-            .args(["awg-quick", "down", name])
-            .output()
-            .expect("Something went wrong!");
-        if output.status.success() {
-            ConnectionStatus::Disconnected
-        } else {
-            let error = String::from_utf8_lossy(&output.stderr).to_string();
-            panic!("{}", error)
+
+    pub fn disconnect(path: PathBuf, password: &SecretString) -> ConnectionStatus {
+        let Ok(mut child) = Command::new("sudo")
+            .args([
+                "-S",
+                "-p",
+                "",
+                "awg-quick",
+                "down",
+                path.to_str().expect("Not valid path!"),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        else {
+            return ConnectionStatus::Connected;
+        };
+
+        if let Some(mut stdin) = child.stdin.take() {
+            if writeln!(stdin, "{}", password.expose_secret()).is_err() {
+                return ConnectionStatus::Connected;
+            }
         }
-    }
 
-    pub fn save_config(path: String, name: String) -> Result<(), io::Error> {
-        let file_content = fs::read_to_string(path)?;
-        let new_file_path = dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(format!(".local/share/rawg/{}.conf", name));
+        match child.wait_with_output() {
+            Ok(output) if output.status.success() => ConnectionStatus::Disconnected,
+            _ => ConnectionStatus::Connected,
+        }
+        pub fn save_config(path: String, name: String) -> Result<(), io::Error> {
+            let file_content = fs::read_to_string(path)?;
+            let new_file_path = dirs::home_dir()
+                .expect("Could not find home directory")
+                .join(format!(".local/share/rawg/{}.conf", name));
 
-        fs::create_dir_all("~/.local/share/rawg")?;
-        fs::write(new_file_path, file_content)?;
+            fs::create_dir_all("~/.local/share/rawg")?;
+            fs::write(new_file_path, file_content)?;
 
-        Ok(())
-    }
+            Ok(())
+        }
 
-    pub fn remove_config(name: String) -> Result<(), io::Error> {
-        let file_path = dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(format!(".local/share/rawg/{}.conf", name));
-        fs::remove_file(file_path)?;
+        pub fn remove_config(name: String) -> Result<(), io::Error> {
+            let file_path = dirs::home_dir()
+                .expect("Could not find home directory")
+                .join(format!(".local/share/rawg/{}.conf", name));
+            fs::remove_file(file_path)?;
 
-        Ok(())
-    }
+            Ok(())
+        }
 
-    pub fn import_config(name: String) -> ServerConfig {
-        let file_path = dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(format!(".local/share/rawg/{}.conf", name));
-        ServerConfig::new(name, file_path)
+        pub fn import_config(name: String) -> ServerConfig {
+            let file_path = dirs::home_dir()
+                .expect("Could not find home directory")
+                .join(format!(".local/share/rawg/{}.conf", name));
+            ServerConfig::new(name, file_path, ConnectionStatus::Disconnected)
+        }
     }
 }
