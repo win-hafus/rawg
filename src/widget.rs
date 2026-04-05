@@ -3,81 +3,81 @@ use crate::{App, header::ConnectionStatus};
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style, Stylize},
-    symbols::border,
-    text::Line,
+    style::{Color, Modifier, Style, Stylize},
+    text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Clear, List, ListItem, Padding, Paragraph, StatefulWidget,
-        Widget,
+        Block, BorderType, Borders, Clear, List, ListItem, Paragraph, StatefulWidget, Widget,
     },
 };
 
 impl Widget for &mut App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = Line::from(" Rust Amnezia WireGuard ".bold());
-        let instructions = Line::from(vec![
-            " Down: ".into(),
-            "<j>".blue().bold(),
-            " Up: ".into(),
-            "<k>".blue().bold(),
-            " Quit: ".into(),
-            "<q>".blue().bold(),
-            " (Dis)Connect: ".into(),
-            "<Enter>".blue().bold(),
-        ]);
+        // Три зоны как в file_explorer
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Заголовок
+                Constraint::Min(0),    // Список серверов
+                Constraint::Length(3), // Подсказки
+            ])
+            .split(area);
 
+        // --- Заголовок ---
+        let title_widget = Paragraph::new(" Rust Amnezia WireGuard ")
+            .block(Block::default().borders(Borders::ALL).title(" RAWG "))
+            .style(Style::default().bold());
+        title_widget.render(chunks[0], buf);
+
+        // --- Список серверов ---
         let items: Vec<ListItem> = self
             .servers
             .iter()
-            .map(|s| {
-                let label = match &s.status {
-                    ConnectionStatus::Connected => format!("{} ({})", s.name, s.status.as_str()),
-                    ConnectionStatus::Disconnected => s.name.clone(),
-                };
-                ListItem::new(label)
+            .map(|s| match s.status {
+                ConnectionStatus::Connected => ListItem::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(s.name.clone(), Style::default().fg(Color::White)),
+                    Span::raw(" — "),
+                    Span::styled(
+                        "Connected",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])),
+                ConnectionStatus::Disconnected => ListItem::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(s.name.clone(), Style::default().fg(Color::DarkGray)),
+                ])),
             })
             .collect();
 
-        let block_app = Block::bordered()
-            .title(title.centered())
-            .title_bottom(instructions.centered())
-            .border_set(border::EMPTY);
-
-        let block_list = Block::bordered()
-            .title("Servers: ")
-            .padding(Padding::new(0, 1, 1, 0))
-            .border_set(border::EMPTY);
-        let block_list_area = block_app.inner(area);
-
-        let centered_area = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(10),
-                Constraint::Percentage(80),
-                Constraint::Percentage(10),
-            ])
-            .split(block_list_area)[1];
-
-        let centered_area = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(10),
-                Constraint::Percentage(80),
-                Constraint::Percentage(10),
-            ])
-            .split(centered_area)[1];
-
-        block_app.render(area, buf);
-
         StatefulWidget::render(
             List::new(items)
-                .block(block_list)
-                .highlight_style(Style::default().red().bold())
-                .highlight_symbol(""),
-            centered_area,
+                .block(Block::default().borders(Borders::ALL).title(" Servers "))
+                .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+                .highlight_symbol("*"),
+            chunks[1],
             buf,
             &mut self.list_state,
         );
+
+        // --- Подсказки ---
+        let help_text = if let Some(msg) = &self.status_message {
+            format!(" ⚠ {}  <Esc>: Dismiss", msg)
+        } else {
+            "<J> <K> Navigate  <Enter>: (Dis)Connect  <A>: Add  <D>: Delete  <Q>: Quit".to_string()
+        };
+
+        let help_style = if self.status_message.is_some() {
+            Style::default().fg(Color::Red)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        Paragraph::new(help_text)
+            .block(Block::default().borders(Borders::ALL))
+            .style(help_style)
+            .render(chunks[2], buf);
         if self.show_auth_popup {
             self.render_popup(area, buf);
         }
@@ -104,18 +104,19 @@ impl App {
             ])
             .split(vertical_layout[1])[1]
     }
+
     pub fn render_popup(&self, area: Rect, buf: &mut Buffer) {
         let popup_area = App::popup_rect(area);
 
         Clear.render(popup_area, buf);
 
         let masked_password = "*".repeat(self.input_buffer.len());
-        let title = Line::from("Sudo Password".bold());
+        let title = Line::from(" Sudo Password ".bold());
         let title_bottom = Line::from(vec![
-            " Enter: ".into(),
-            " <Enter> ".blue().bold().into(),
-            " Close: ".into(),
-            " <Esc> ".blue().bold().into(),
+            " Confirm: ".into(),
+            "<Enter>".blue().bold(),
+            " Cancel: ".into(),
+            "<Esc>".blue().bold(),
         ]);
 
         let block = Block::default()

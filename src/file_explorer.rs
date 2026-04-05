@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct FileExplorer {
     pub current_dir: PathBuf,
@@ -51,16 +51,21 @@ impl FileExplorer {
             for entry in read_dir.flatten() {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                
+
                 // Скрываем скрытые файлы (начинающиеся с '.')
-                if name.starts_with('.') { continue; }
+                if name.starts_with('.') {
+                    continue;
+                }
 
                 let is_dir = path.is_dir();
-                let is_conf = path.extension()
-                    .map(|e| e == "conf")
-                    .unwrap_or(false);
+                let is_conf = path.extension().map(|e| e == "conf").unwrap_or(false);
 
-                let entry = DirEntry { name, path, is_dir, is_conf };
+                let entry = DirEntry {
+                    name,
+                    path,
+                    is_dir,
+                    is_conf,
+                };
 
                 if is_dir {
                     dirs.push(entry);

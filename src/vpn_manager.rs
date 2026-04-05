@@ -1,6 +1,8 @@
-use crate::ConnectionStatus;
+use crate::{ConnectionStatus, ServerConfig};
 // use dirs;
 use secrecy::{ExposeSecret, SecretString};
+use std::fs;
+use std::io;
 use std::io::Write;
 use std::{
     path::PathBuf,
@@ -68,32 +70,63 @@ impl VpnManager {
             Ok(output) if output.status.success() => ConnectionStatus::Disconnected,
             _ => ConnectionStatus::Connected,
         }
-        pub fn save_config(path: String, name: String) -> Result<(), io::Error> {
-            let file_content = fs::read_to_string(path)?;
-            let new_file_path = dirs::home_dir()
-                .expect("Could not find home directory")
-                .join(format!(".local/share/rawg/{}.conf", name));
+    }
 
-            fs::create_dir_all("~/.local/share/rawg")?;
-            fs::write(new_file_path, file_content)?;
+    pub fn save_config(path: PathBuf, name: String) -> Result<(), io::Error> {
+        let file_content = fs::read_to_string(&path)?;
+        let new_file_path = dirs::home_dir()
+            .expect("Could not find home directory")
+            .join(format!(".local/share/rawg/{}.conf", name));
 
-            Ok(())
-        }
+        let config_dir = dirs::home_dir()
+            .expect("Could not find home directory")
+            .join(".local/share/rawg");
 
-        pub fn remove_config(name: String) -> Result<(), io::Error> {
-            let file_path = dirs::home_dir()
-                .expect("Could not find home directory")
-                .join(format!(".local/share/rawg/{}.conf", name));
-            fs::remove_file(file_path)?;
+        fs::create_dir_all(config_dir)?;
+        fs::write(new_file_path, file_content)?;
 
-            Ok(())
-        }
+        Ok(())
+    }
 
-        pub fn import_config(name: String) -> ServerConfig {
-            let file_path = dirs::home_dir()
-                .expect("Could not find home directory")
-                .join(format!(".local/share/rawg/{}.conf", name));
-            ServerConfig::new(name, file_path, ConnectionStatus::Disconnected)
+    pub fn remove_config(name: String) -> Result<(), io::Error> {
+        let file_path = dirs::home_dir()
+            .expect("Could not find home directory")
+            .join(format!(".local/share/rawg/{}.conf", name));
+        fs::remove_file(file_path)?;
+
+        Ok(())
+    }
+
+    pub fn validate_config(path: &PathBuf) -> bool {
+        let Ok(content) = fs::read_to_string(path) else {
+            return false;
+        };
+
+        // Обязательные секции для WireGuard/AmneziaWG конфига
+        let has_interface = content.contains("[Interface]");
+        let has_peer = content.contains("[Peer]");
+
+        // Обязательные поля в [Interface]
+        let has_private_key = content.contains("PrivateKey");
+        let has_address = content.contains("Address");
+
+        // Обязательные поля в [Peer]
+        let has_public_key = content.contains("PublicKey");
+        let has_endpoint = content.contains("Endpoint");
+
+        has_interface
+            && has_peer
+            && has_private_key
+            && has_address
+            && has_public_key
+            && has_endpoint
+    }
+    pub fn check_connection_status(name: &str) -> ConnectionStatus {
+        let output = Command::new("ip").args(["link", "show", name]).output();
+
+        match output {
+            Ok(out) if out.status.success() => ConnectionStatus::Connected,
+            _ => ConnectionStatus::Disconnected,
         }
     }
 }
