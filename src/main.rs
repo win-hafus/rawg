@@ -5,8 +5,10 @@ mod vpn_manager;
 mod widget;
 
 use crate::{
-    file_explorer::FileExplorer, header::ConnectionStatus, header::ServerConfig,
-    ui::render_file_explorer, vpn_manager::VpnManager,
+    file_explorer::FileExplorer,
+    header::{ConnectionStatus, ServerConfig},
+    ui::render_file_explorer,
+    vpn_manager::VpnManager,
 };
 
 use std::io;
@@ -27,42 +29,26 @@ struct App {
     pub exit: bool,
 }
 
-fn load_servers() -> Vec<ServerConfig> {
-    let config_dir = dirs::home_dir()
-        .expect("Could not find home directory")
-        .join(".local/share/rawg");
-
-    let Ok(entries) = std::fs::read_dir(&config_dir) else {
-        return vec![];
-    };
-
-    entries
-        .flatten()
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "conf")
-                .unwrap_or(false)
-        })
-        .map(|e| {
-            let path = e.path();
-            let name = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let status = VpnManager::check_connection_status(&name); // ← проверяем статус
-            ServerConfig::new(name, path, status)
-        })
-        .collect()
-}
-
 impl App {
+    fn new() -> Self {
+        Self {
+            servers: VpnManager::load_servers(),
+            explorer: FileExplorer::new(),
+            list_state: ListState::default().with_selected(Some(0)),
+            status_message: None,
+            show_auth_popup: false,
+            show_explorer: false,
+            input_buffer: String::new(),
+            sudo_password: None,
+            exit: false,
+        }
+    }
+
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
 
-            // Ждём событие не дольше 2 секунд
+            // Ждём событие не дольше 2 секунд, затем обновляем статусы
             if event::poll(std::time::Duration::from_secs(2))? {
                 if let Event::Key(key_event) = event::read()? {
                     if key_event.kind == KeyEventKind::Press {
@@ -70,7 +56,6 @@ impl App {
                     }
                 }
             } else {
-                // Таймаут истёк — обновляем статусы
                 self.refresh_statuses();
             }
         }
@@ -84,20 +69,11 @@ impl App {
             frame.render_widget(self, frame.area());
         }
     }
+
     fn refresh_statuses(&mut self) {
         for server in &mut self.servers {
             server.status = VpnManager::check_connection_status(&server.name);
         }
-    }
-
-    fn handle_events(&mut self) -> io::Result<()> {
-        match event::read()? {
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.handle_key_event(key_event)
-            }
-            _ => {}
-        };
-        Ok(())
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -113,12 +89,12 @@ impl App {
     fn handle_main_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Esc => self.status_message = None,
-            KeyCode::Char('q') => self.exit(),
-            KeyCode::Char('j') => self.down(),
-            KeyCode::Char('k') => self.up(),
+            KeyCode::Char('q') => self.exit = true,
+            KeyCode::Char('j') => self.nav_down(),
+            KeyCode::Char('k') => self.nav_up(),
             KeyCode::Char('a') => self.show_explorer = true,
             KeyCode::Char('d') => self.remove_selected_config(),
-            KeyCode::Enter => self.connection(),
+            KeyCode::Enter => self.toggle_connection(),
             _ => {}
         }
     }
@@ -126,11 +102,10 @@ impl App {
     fn handle_popup_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Enter => {
-                self.sudo_password = Some(secrecy::SecretString::from(self.input_buffer.clone()));
+                self.sudo_password = Some(SecretString::from(self.input_buffer.clone()));
                 self.input_buffer.clear();
                 self.show_auth_popup = false;
-
-                self.connection();
+                self.toggle_connection();
             }
             KeyCode::Esc => {
                 self.show_auth_popup = false;
@@ -145,56 +120,57 @@ impl App {
             _ => {}
         }
     }
+
     fn handle_explorer_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Esc => self.show_explorer = false,
             KeyCode::Char('j') => self.explorer.move_down(20),
             KeyCode::Char('k') => self.explorer.move_up(),
-            KeyCode::Enter => {
-                if let Some(conf_path) = self.explorer.enter() {
-                    if !VpnManager::validate_config(&conf_path) {
-                        self.status_message = Some("Invalid WireGuard config!".to_string());
-                        self.show_explorer = false;
-                        return;
-                    }
-
-                    let name = conf_path
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-
-                    match VpnManager::save_config(conf_path, name) {
-                        Ok(_) => {
-                            self.servers = load_servers();
-                            self.show_explorer = false;
-                            self.status_message = None;
-                        }
-                        Err(e) => {
-                            self.status_message = Some(format!("Error: {}", e));
-                        }
-                    }
-                }
-            }
+            KeyCode::Enter => self.explorer_select(),
             _ => {}
         }
     }
 
-    fn exit(&mut self) {
-        self.exit = true;
+    fn explorer_select(&mut self) {
+        let Some(conf_path) = self.explorer.enter() else {
+            return;
+        };
+
+        if !VpnManager::validate_config(&conf_path) {
+            self.status_message = Some("Invalid WireGuard config!".to_string());
+            self.show_explorer = false;
+            return;
+        }
+
+        let name = conf_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        match VpnManager::save_config(&conf_path, &name) {
+            Ok(_) => {
+                self.servers = VpnManager::load_servers();
+                self.show_explorer = false;
+                self.status_message = None;
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Error: {}", e));
+            }
+        }
     }
 
-    fn up(&mut self) {
+    fn nav_up(&mut self) {
         self.status_message = None;
         self.list_state.select_previous();
     }
 
-    fn down(&mut self) {
+    fn nav_down(&mut self) {
         self.status_message = None;
         self.list_state.select_next();
     }
 
-    fn connection(&mut self) {
+    fn toggle_connection(&mut self) {
         let Some(index) = self.list_state.selected() else {
             return;
         };
@@ -202,18 +178,18 @@ impl App {
             return;
         };
 
-        if self.sudo_password.is_none() {
+        // Пароль ещё не введён — показываем попап
+        let Some(password) = &self.sudo_password else {
             self.show_auth_popup = true;
             return;
-        }
-
-        let password = self.sudo_password.as_ref().unwrap();
+        };
 
         server.status = match server.status {
-            ConnectionStatus::Disconnected => VpnManager::connect(server.path.clone(), password),
-            ConnectionStatus::Connected => VpnManager::disconnect(server.path.clone(), password),
+            ConnectionStatus::Disconnected => VpnManager::connect(&server.path, password),
+            ConnectionStatus::Connected => VpnManager::disconnect(&server.path, password),
         };
     }
+
     fn remove_selected_config(&mut self) {
         let Some(index) = self.list_state.selected() else {
             return;
@@ -222,15 +198,16 @@ impl App {
             return;
         };
 
-        match VpnManager::remove_config(server.name.clone()) {
+        match VpnManager::remove_config(&server.name) {
             Ok(_) => {
-                self.servers = load_servers();
+                self.servers = VpnManager::load_servers();
                 // Корректируем выделение если удалили последний элемент
-                if self.servers.is_empty() {
-                    self.list_state.select(None);
-                } else if index >= self.servers.len() {
-                    self.list_state.select(Some(self.servers.len() - 1));
-                }
+                let new_selected = if self.servers.is_empty() {
+                    None
+                } else {
+                    Some(index.min(self.servers.len() - 1))
+                };
+                self.list_state.select(new_selected);
             }
             Err(e) => {
                 self.status_message = Some(format!("Error: {}", e));
@@ -240,18 +217,6 @@ impl App {
 }
 
 fn main() -> io::Result<()> {
-    let mut app = App {
-        servers: load_servers(),
-        explorer: FileExplorer::new(),
-        list_state: ListState::default().with_selected(Some(0)),
-
-        status_message: None,
-        show_auth_popup: false,
-        show_explorer: false,
-        input_buffer: String::new(),
-        sudo_password: None,
-        exit: false,
-    };
-
+    let mut app = App::new();
     ratatui::run(|terminal| app.run(terminal))
 }

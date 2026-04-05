@@ -20,11 +20,13 @@ pub fn render_file_explorer(f: &mut Frame, area: Rect, explorer: &FileExplorer) 
     // --- Текущий путь ---
     let path_text = explorer.current_dir.to_string_lossy().to_string();
     let path_widget =
-        Paragraph::new(path_text).block(Block::default().borders(Borders::ALL).title("  Path "));
+        Paragraph::new(path_text).block(Block::default().borders(Borders::ALL).title("  Path "));
     f.render_widget(path_widget, chunks[0]);
 
     // --- Список файлов ---
-    let visible_height = chunks[1].height as usize - 2; // минус бордеры
+    // Вычитаем 2 на верхний и нижний бордер
+    let visible_height = (chunks[1].height as usize).saturating_sub(2);
+
     let items: Vec<ListItem> = explorer
         .entries
         .iter()
@@ -33,8 +35,9 @@ pub fn render_file_explorer(f: &mut Frame, area: Rect, explorer: &FileExplorer) 
         .take(visible_height)
         .map(|(i, entry)| {
             let is_selected = i == explorer.selected;
-            let (icon, style) = if entry.is_dir {
-                (" ", Style::default().fg(Color::Blue))
+
+            let (icon, base_style) = if entry.is_dir {
+                (" ", Style::default().fg(Color::Blue))
             } else if entry.is_conf {
                 ("⚙️  ", Style::default().fg(Color::Green))
             } else {
@@ -42,9 +45,9 @@ pub fn render_file_explorer(f: &mut Frame, area: Rect, explorer: &FileExplorer) 
             };
 
             let style = if is_selected {
-                style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                base_style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
-                style
+                base_style
             };
 
             ListItem::new(Line::from(vec![
@@ -70,7 +73,7 @@ pub fn render_file_explorer(f: &mut Frame, area: Rect, explorer: &FileExplorer) 
     f.render_stateful_widget(list, chunks[1], &mut state);
 
     // --- Подсказки ---
-    let help = Paragraph::new("<J> <K> Navigate  <Enter>: Open/Select  <Esc>: Cancel")
+    let help = Paragraph::new("<J>/<K>: Navigate  <Enter>: Open/Select  <Esc>: Cancel")
         .block(Block::default().borders(Borders::ALL))
         .style(Style::default().fg(Color::DarkGray));
     f.render_widget(help, chunks[2]);

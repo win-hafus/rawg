@@ -12,7 +12,6 @@ use ratatui::{
 
 impl Widget for &mut App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Три зоны как в file_explorer
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -23,10 +22,10 @@ impl Widget for &mut App {
             .split(area);
 
         // --- Заголовок ---
-        let title_widget = Paragraph::new(" Rust Amnezia WireGuard ")
+        Paragraph::new(" Rust Amnezia WireGuard ")
             .block(Block::default().borders(Borders::ALL).title(" RAWG "))
-            .style(Style::default().bold());
-        title_widget.render(chunks[0], buf);
+            .style(Style::default().bold())
+            .render(chunks[0], buf);
 
         // --- Список серверов ---
         let items: Vec<ListItem> = self
@@ -54,30 +53,35 @@ impl Widget for &mut App {
         StatefulWidget::render(
             List::new(items)
                 .block(Block::default().borders(Borders::ALL).title(" Servers "))
-                .highlight_style(Style::default().add_modifier(Modifier::BOLD))
-                .highlight_symbol("*"),
+                .highlight_style(
+                    Style::default()
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("→ "),
             chunks[1],
             buf,
             &mut self.list_state,
         );
 
-        // --- Подсказки ---
-        let help_text = if let Some(msg) = &self.status_message {
-            format!(" ⚠ {}  <Esc>: Dismiss", msg)
+        // --- Подсказки / сообщение об ошибке ---
+        let (help_text, help_style) = if let Some(msg) = &self.status_message {
+            (
+                format!(" ⚠  {}  <Esc>: Dismiss", msg),
+                Style::default().fg(Color::Red),
+            )
         } else {
-            "<J> <K> Navigate  <Enter>: (Dis)Connect  <A>: Add  <D>: Delete  <Q>: Quit".to_string()
-        };
-
-        let help_style = if self.status_message.is_some() {
-            Style::default().fg(Color::Red)
-        } else {
-            Style::default().fg(Color::Gray)
+            (
+                "<J>/<K>: Navigate  <Enter>: (Dis)Connect  <A>: Add  <D>: Delete  <Q>: Quit"
+                    .to_string(),
+                Style::default().fg(Color::Gray),
+            )
         };
 
         Paragraph::new(help_text)
             .block(Block::default().borders(Borders::ALL))
             .style(help_style)
             .render(chunks[2], buf);
+
         if self.show_auth_popup {
             self.render_popup(area, buf);
         }
@@ -85,8 +89,9 @@ impl Widget for &mut App {
 }
 
 impl App {
+    /// Центрирует попап: 40% ширины, одна строка по высоте.
     pub fn popup_rect(area: Rect) -> Rect {
-        let vertical_layout = Layout::default()
+        let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Fill(1),
@@ -102,20 +107,19 @@ impl App {
                 Constraint::Percentage(40),
                 Constraint::Percentage(30),
             ])
-            .split(vertical_layout[1])[1]
+            .split(vertical[1])[1]
     }
 
     pub fn render_popup(&self, area: Rect, buf: &mut Buffer) {
         let popup_area = App::popup_rect(area);
-
         Clear.render(popup_area, buf);
 
-        let masked_password = "*".repeat(self.input_buffer.len());
+        let masked = "*".repeat(self.input_buffer.len());
         let title = Line::from(" Sudo Password ".bold());
         let title_bottom = Line::from(vec![
             " Confirm: ".into(),
             "<Enter>".blue().bold(),
-            " Cancel: ".into(),
+            "  Cancel: ".into(),
             "<Esc>".blue().bold(),
         ]);
 
@@ -126,7 +130,7 @@ impl App {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(Color::White));
 
-        Paragraph::new(masked_password)
+        Paragraph::new(masked)
             .block(block)
             .alignment(Alignment::Center)
             .render(popup_area, buf);

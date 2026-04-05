@@ -33,7 +33,7 @@ impl FileExplorer {
         self.selected = 0;
         self.scroll_offset = 0;
 
-        // Добавляем ".." для перехода наверх
+        // Кнопка ".." для перехода в родительский каталог
         if let Some(parent) = self.current_dir.parent() {
             self.entries.push(DirEntry {
                 name: "..".to_string(),
@@ -43,7 +43,6 @@ impl FileExplorer {
             });
         }
 
-        // Читаем содержимое директории
         if let Ok(read_dir) = fs::read_dir(&self.current_dir) {
             let mut dirs = vec![];
             let mut files = vec![];
@@ -58,23 +57,18 @@ impl FileExplorer {
                 }
 
                 let is_dir = path.is_dir();
-                let is_conf = path.extension().map(|e| e == "conf").unwrap_or(false);
+                let is_conf = path.extension().map_or(false, |e| e == "conf");
 
-                let entry = DirEntry {
-                    name,
-                    path,
-                    is_dir,
-                    is_conf,
-                };
+                let dir_entry = DirEntry { name, path, is_dir, is_conf };
 
                 if is_dir {
-                    dirs.push(entry);
+                    dirs.push(dir_entry);
                 } else {
-                    files.push(entry);
+                    files.push(dir_entry);
                 }
             }
 
-            // Сортируем: директории вверху, потом файлы
+            // Директории вверху, потом файлы — оба отсортированы по имени
             dirs.sort_by(|a, b| a.name.cmp(&b.name));
             files.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -101,8 +95,9 @@ impl FileExplorer {
         }
     }
 
+    /// Переходит в директорию или возвращает путь к выбранному .conf файлу.
     pub fn enter(&mut self) -> Option<PathBuf> {
-        let entry = &self.entries[self.selected];
+        let entry = self.entries.get(self.selected)?;
         if entry.is_dir {
             self.current_dir = entry.path.clone();
             self.reload();
@@ -114,7 +109,10 @@ impl FileExplorer {
         }
     }
 
-    pub fn selected_entry(&self) -> Option<&DirEntry> {
-        self.entries.get(self.selected)
+}
+
+impl Default for FileExplorer {
+    fn default() -> Self {
+        Self::new()
     }
 }

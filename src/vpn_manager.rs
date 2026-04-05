@@ -1,132 +1,137 @@
-use crate::{ConnectionStatus, ServerConfig};
-// use dirs;
+use crate::header::ConnectionStatus;
 use secrecy::{ExposeSecret, SecretString};
 use std::fs;
-use std::io;
-use std::io::Write;
-use std::{
-    path::PathBuf,
-    process::{Command, Stdio},
-};
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 pub struct VpnManager;
 
 impl VpnManager {
-    pub fn connect(path: PathBuf, password: &SecretString) -> ConnectionStatus {
+    /// Поднимает VPN-туннель через `awg-quick up`.
+    /// Возвращает `Connected` при успехе, иначе `Disconnected`.
+    pub fn connect(path: &PathBuf, password: &SecretString) -> ConnectionStatus {
+        let path_str = path.to_str().expect("Not valid path!");
+        match Self::run_awg_quick("up", path_str, password) {
+            true => ConnectionStatus::Connected,
+            false => ConnectionStatus::Disconnected,
+        }
+    }
+
+    /// Опускает VPN-туннель через `awg-quick down`.
+    /// Возвращает `Disconnected` при успехе, иначе `Connected`.
+    pub fn disconnect(path: &PathBuf, password: &SecretString) -> ConnectionStatus {
+        let path_str = path.to_str().expect("Not valid path!");
+        match Self::run_awg_quick("down", path_str, password) {
+            true => ConnectionStatus::Disconnected,
+            false => ConnectionStatus::Connected,
+        }
+    }
+
+    /// Общий хелпер для запуска `sudo awg-quick <cmd> <path>` с паролем через stdin.
+    fn run_awg_quick(cmd: &str, path_str: &str, password: &SecretString) -> bool {
         let Ok(mut child) = Command::new("sudo")
-            .args([
-                "-S",
-                "-p",
-                "",
-                "awg-quick",
-                "up",
-                path.to_str().expect("Not valid path!"),
-            ])
+            .args(["-S", "-p", "", "awg-quick", cmd, path_str])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
         else {
-            return ConnectionStatus::Disconnected;
+            return false;
         };
 
         if let Some(mut stdin) = child.stdin.take() {
             if writeln!(stdin, "{}", password.expose_secret()).is_err() {
-                return ConnectionStatus::Disconnected;
+                return false;
             }
         }
 
-        match child.wait_with_output() {
-            Ok(output) if output.status.success() => ConnectionStatus::Connected,
-            _ => ConnectionStatus::Disconnected,
-        }
+        child
+            .wait_with_output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
     }
 
-    pub fn disconnect(path: PathBuf, password: &SecretString) -> ConnectionStatus {
-        let Ok(mut child) = Command::new("sudo")
-            .args([
-                "-S",
-                "-p",
-                "",
-                "awg-quick",
-                "down",
-                path.to_str().expect("Not valid path!"),
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        else {
-            return ConnectionStatus::Connected;
-        };
+    /// Копирует конфиг в `~/.local/share/rawg/<name>.conf`.
+    pub fn save_config(path: &PathBuf, name: &str) -> io::Result<()> {
+        let config_dir = Self::config_dir();
+        fs::create_dir_all(&config_dir)?;
 
-        if let Some(mut stdin) = child.stdin.take() {
-            if writeln!(stdin, "{}", password.expose_secret()).is_err() {
-                return ConnectionStatus::Connected;
-            }
-        }
-
-        match child.wait_with_output() {
-            Ok(output) if output.status.success() => ConnectionStatus::Disconnected,
-            _ => ConnectionStatus::Connected,
-        }
-    }
-
-    pub fn save_config(path: PathBuf, name: String) -> Result<(), io::Error> {
-        let file_content = fs::read_to_string(&path)?;
-        let new_file_path = dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(format!(".local/share/rawg/{}.conf", name));
-
-        let config_dir = dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(".local/share/rawg");
-
-        fs::create_dir_all(config_dir)?;
-        fs::write(new_file_path, file_content)?;
+        let content = fs::read_to_string(path)?;
+        let dest = config_dir.join(format!("{}.conf", name));
+        fs::write(dest, content)?;
 
         Ok(())
     }
 
-    pub fn remove_config(name: String) -> Result<(), io::Error> {
-        let file_path = dirs::home_dir()
-            .expect("Could not find home directory")
-            .join(format!(".local/share/rawg/{}.conf", name));
-        fs::remove_file(file_path)?;
-
-        Ok(())
+    /// Удаляет конфиг `~/.local/share/rawg/<name>.conf`.
+    pub fn remove_config(name: &str) -> io::Result<()> {
+        let file_path = Self::config_dir().join(format!("{}.conf", name));
+        fs::remove_file(file_path)
     }
 
+    /// Проверяет наличие обязательных секций WireGuard/AmneziaWG конфига.
     pub fn validate_config(path: &PathBuf) -> bool {
         let Ok(content) = fs::read_to_string(path) else {
             return false;
         };
 
-        // Обязательные секции для WireGuard/AmneziaWG конфига
-        let has_interface = content.contains("[Interface]");
-        let has_peer = content.contains("[Peer]");
+        let required = [
+            "[Interface]",
+            "[Peer]",
+            "PrivateKey",
+            "Address",
+            "PublicKey",
+            "Endpoint",
+        ];
 
-        // Обязательные поля в [Interface]
-        let has_private_key = content.contains("PrivateKey");
-        let has_address = content.contains("Address");
-
-        // Обязательные поля в [Peer]
-        let has_public_key = content.contains("PublicKey");
-        let has_endpoint = content.contains("Endpoint");
-
-        has_interface
-            && has_peer
-            && has_private_key
-            && has_address
-            && has_public_key
-            && has_endpoint
+        required.iter().all(|field| content.contains(field))
     }
-    pub fn check_connection_status(name: &str) -> ConnectionStatus {
-        let output = Command::new("ip").args(["link", "show", name]).output();
 
-        match output {
-            Ok(out) if out.status.success() => ConnectionStatus::Connected,
-            _ => ConnectionStatus::Disconnected,
-        }
+    /// Проверяет статус подключения через `ip link show <name>`.
+    pub fn check_connection_status(name: &str) -> ConnectionStatus {
+        Command::new("ip")
+            .args(["link", "show", name])
+            .output()
+            .map(|out| {
+                if out.status.success() {
+                    ConnectionStatus::Connected
+                } else {
+                    ConnectionStatus::Disconnected
+                }
+            })
+            .unwrap_or(ConnectionStatus::Disconnected)
+    }
+
+    /// Загружает все серверы из `~/.local/share/rawg/*.conf`.
+    pub fn load_servers() -> Vec<crate::header::ServerConfig> {
+        use crate::header::ServerConfig;
+
+        let config_dir = Self::config_dir();
+
+        let Ok(entries) = fs::read_dir(&config_dir) else {
+            return vec![];
+        };
+
+        entries
+            .flatten()
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "conf"))
+            .map(|e| {
+                let path = e.path();
+                let name = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let status = Self::check_connection_status(&name);
+                ServerConfig::new(name, path, status)
+            })
+            .collect()
+    }
+
+    fn config_dir() -> PathBuf {
+        dirs::home_dir()
+            .expect("Could not find home directory")
+            .join(".local/share/rawg")
     }
 }
