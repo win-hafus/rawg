@@ -8,7 +8,7 @@ use crate::{
     file_explorer::FileExplorer,
     header::{ConnectionStatus, ServerConfig},
     ui::render_file_explorer,
-    vpn_manager::VpnManager,
+    vpn_manager::{PrivilegeManager, VpnManager},
 };
 
 use std::io;
@@ -21,6 +21,7 @@ struct App {
     pub servers: Vec<ServerConfig>,
     pub explorer: FileExplorer,
     pub list_state: ListState,
+    pub privilege_manager: PrivilegeManager,
     sudo_password: Option<SecretString>,
     pub input_buffer: String,
     pub show_auth_popup: bool,
@@ -35,6 +36,7 @@ impl App {
             servers: VpnManager::load_servers(),
             explorer: FileExplorer::new(),
             list_state: ListState::default().with_selected(Some(0)),
+            privilege_manager: PrivilegeManager::detect(),
             status_message: None,
             show_auth_popup: false,
             show_explorer: false,
@@ -178,16 +180,27 @@ impl App {
             return;
         };
 
-        // Пароль ещё не введён — показываем попап
-        let Some(password) = &self.sudo_password else {
+        // Для sudo нужен пароль — показываем попап если ещё не введён
+        if self.privilege_manager.needs_password() && self.sudo_password.is_none() {
             self.show_auth_popup = true;
             return;
-        };
+        }
+
+        let password = self.sudo_password.as_ref();
+        let prev_status = server.status.clone();
 
         server.status = match server.status {
-            ConnectionStatus::Disconnected => VpnManager::connect(&server.path, password),
-            ConnectionStatus::Connected => VpnManager::disconnect(&server.path, password),
+            ConnectionStatus::Disconnected => VpnManager::connect(&server.path, &self.privilege_manager, password),
+            ConnectionStatus::Connected => VpnManager::disconnect(&server.path, &self.privilege_manager, password),
         };
+
+        // Если статус не изменился — команда не удалась
+        if server.status == prev_status && self.privilege_manager == PrivilegeManager::Doas {
+            self.status_message = Some(
+                "doas failed. Add to /etc/doas.conf: permit nopass <user> as root cmd awg-quick"
+                    .to_string(),
+            );
+        }
     }
 
     fn remove_selected_config(&mut self) {

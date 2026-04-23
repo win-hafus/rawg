@@ -5,51 +5,91 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum PrivilegeManager {
+    Doas,
+    Sudo,
+}
+
+impl PrivilegeManager {
+    pub fn detect() -> Self {
+        if Command::new("which")
+            .arg("doas")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            PrivilegeManager::Doas
+        } else {
+            PrivilegeManager::Sudo
+        }
+    }
+
+    pub fn needs_password(&self) -> bool {
+        matches!(self, PrivilegeManager::Sudo)
+    }
+}
+
 pub struct VpnManager;
 
 impl VpnManager {
-    /// Поднимает VPN-туннель через `awg-quick up`.
-    /// Возвращает `Connected` при успехе, иначе `Disconnected`.
-    pub fn connect(path: &PathBuf, password: &SecretString) -> ConnectionStatus {
+    pub fn connect(path: &PathBuf, privilege: &PrivilegeManager, password: Option<&SecretString>) -> ConnectionStatus {
         let path_str = path.to_str().expect("Not valid path!");
-        match Self::run_awg_quick("up", path_str, password) {
+        match Self::run_awg_quick("up", path_str, privilege, password) {
             true => ConnectionStatus::Connected,
             false => ConnectionStatus::Disconnected,
         }
     }
 
-    /// Опускает VPN-туннель через `awg-quick down`.
-    /// Возвращает `Disconnected` при успехе, иначе `Connected`.
-    pub fn disconnect(path: &PathBuf, password: &SecretString) -> ConnectionStatus {
+    pub fn disconnect(path: &PathBuf, privilege: &PrivilegeManager, password: Option<&SecretString>) -> ConnectionStatus {
         let path_str = path.to_str().expect("Not valid path!");
-        match Self::run_awg_quick("down", path_str, password) {
+        match Self::run_awg_quick("down", path_str, privilege, password) {
             true => ConnectionStatus::Disconnected,
             false => ConnectionStatus::Connected,
         }
     }
 
-    /// Общий хелпер для запуска `sudo awg-quick <cmd> <path>` с паролем через stdin.
-    fn run_awg_quick(cmd: &str, path_str: &str, password: &SecretString) -> bool {
-        let Ok(mut child) = Command::new("sudo")
-            .args(["-S", "-p", "", "awg-quick", cmd, path_str])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        else {
-            return false;
-        };
+    fn run_awg_quick(cmd: &str, path_str: &str, privilege: &PrivilegeManager, password: Option<&SecretString>) -> bool {
+        match privilege {
+            PrivilegeManager::Doas => {
+                Command::new("doas")
+                    .args(["awg-quick", cmd, path_str])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            }
+            PrivilegeManager::Sudo => {
+                let Some(password) = password else {
+                    return false;
+                };
 
-        if let Some(mut stdin) = child.stdin.take() {
-            if writeln!(stdin, "{}", password.expose_secret()).is_err() {
-                return false;
+                let Ok(mut child) = Command::new("sudo")
+                    .args(["-S", "-p", "", "awg-quick", cmd, path_str])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                else {
+                    return false;
+                };
+
+                if let Some(mut stdin) = child.stdin.take() {
+                    if writeln!(stdin, "{}", password.expose_secret()).is_err() {
+                        return false;
+                    }
+                }
+
+                child
+                    .wait_with_output()
+                    .map(|out| out.status.success())
+                    .unwrap_or(false)
             }
         }
-
-        child
-            .wait_with_output()
-            .map(|out| out.status.success())
-            .unwrap_or(false)
     }
 
     /// Копирует конфиг в `~/.local/share/rawg/<name>.conf`.
