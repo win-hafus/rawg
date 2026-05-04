@@ -28,7 +28,10 @@ impl PrivilegeManager {
     }
 
     pub fn needs_password(&self) -> bool {
-        matches!(self, PrivilegeManager::Sudo)
+        match self {
+            PrivilegeManager::Sudo => true,
+            PrivilegeManager::Doas => false,
+        }
     }
 }
 

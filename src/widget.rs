@@ -156,7 +156,7 @@ impl App {
             .title_bottom(title_bottom)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_style(Style::default().fg(Color::White));
 
         Paragraph::new(self.input_buffer.clone())
             .block(block)

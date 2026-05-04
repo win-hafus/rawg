@@ -280,6 +280,19 @@ impl App {
             return;
         }
 
+        // Проверяем, подключен ли сервер
+        let Some(index) = self.list_state.selected() else {
+            return;
+        };
+        let Some(server) = self.servers.get(index) else {
+            return;
+        };
+
+        if server.status == ConnectionStatus::Connected {
+            self.status_message = Some("Cannot rename connected server. Disconnect first.".to_string());
+            return;
+        }
+
         match VpnManager::rename_config(old_name, new_name) {
             Ok(_) => {
                 self.servers = VpnManager::load_servers();
