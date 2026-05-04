@@ -71,7 +71,7 @@ impl Widget for &mut App {
             )
         } else {
             (
-                "<J>/<K>: Navigate  <Enter>: (Dis)Connect  <A>: Add  <D>: Delete  <Q>: Quit"
+                "<J>/<K>: Navigate  <Enter>: (Dis)Connect  <A>: Add  <R>: Rename  <D>: Delete  <Q>: Quit"
                     .to_string(),
                 Style::default().fg(Color::Gray),
             )
@@ -84,6 +84,8 @@ impl Widget for &mut App {
 
         if self.show_auth_popup {
             self.render_popup(area, buf);
+        } else if self.show_rename_popup {
+            self.render_rename_popup(area, buf);
         }
     }
 }
@@ -131,6 +133,32 @@ impl App {
             .border_style(Style::default().fg(Color::White));
 
         Paragraph::new(masked)
+            .block(block)
+            .alignment(Alignment::Center)
+            .render(popup_area, buf);
+    }
+
+    pub fn render_rename_popup(&self, area: Rect, buf: &mut Buffer) {
+        let popup_area = App::popup_rect(area);
+        Clear.render(popup_area, buf);
+
+        let old_name = self.rename_old_name.as_ref().map_or("", |s| s.as_str());
+        let title = Line::from(format!(" Rename '{}' ", old_name).bold());
+        let title_bottom = Line::from(vec![
+            " Confirm: ".into(),
+            "<Enter>".blue().bold(),
+            "  Cancel: ".into(),
+            "<Esc>".blue().bold(),
+        ]);
+
+        let block = Block::default()
+            .title(title.centered())
+            .title_bottom(title_bottom)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Yellow));
+
+        Paragraph::new(self.input_buffer.clone())
             .block(block)
             .alignment(Alignment::Center)
             .render(popup_area, buf);

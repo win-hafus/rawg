@@ -110,6 +110,39 @@ impl VpnManager {
         fs::remove_file(file_path)
     }
 
+    pub fn rename_config(old_name: &str, new_name: &str) -> io::Result<()> {
+        let config_dir = Self::config_dir();
+        let old_path = config_dir.join(format!("{}.conf", old_name));
+        let new_path = config_dir.join(format!("{}.conf", new_name));
+
+        // Проверяем, что старый файл существует
+        if !old_path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Config file not found: {}", old_name),
+            ));
+        }
+
+        // Проверяем, что новое имя ещё не используется
+        if new_path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("Config with name '{}' already exists", new_name),
+            ));
+        }
+
+        // Читаем содержимое старого файла
+        let content = fs::read_to_string(&old_path)?;
+
+        // Записываем содержимое в новый файл
+        fs::write(&new_path, content)?;
+
+        // Удаляем старый файл
+        fs::remove_file(&old_path)?;
+
+        Ok(())
+    }
+
     /// Проверяет наличие обязательных секций WireGuard/AmneziaWG конфига.
     pub fn validate_config(path: &PathBuf) -> bool {
         let Ok(content) = fs::read_to_string(path) else {

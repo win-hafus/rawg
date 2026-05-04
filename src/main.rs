@@ -26,6 +26,8 @@ struct App {
     pub input_buffer: String,
     pub show_auth_popup: bool,
     pub show_explorer: bool,
+    pub show_rename_popup: bool,
+    pub rename_old_name: Option<String>,
     pub status_message: Option<String>,
     pub exit: bool,
 }
@@ -40,6 +42,8 @@ impl App {
             status_message: None,
             show_auth_popup: false,
             show_explorer: false,
+            show_rename_popup: false,
+            rename_old_name: None,
             input_buffer: String::new(),
             sudo_password: None,
             exit: false,
@@ -81,6 +85,8 @@ impl App {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.show_auth_popup {
             self.handle_popup_key_event(key_event);
+        } else if self.show_rename_popup {
+            self.handle_rename_key_event(key_event);
         } else if self.show_explorer {
             self.handle_explorer_key_event(key_event);
         } else {
@@ -96,6 +102,7 @@ impl App {
             KeyCode::Char('k') => self.nav_up(),
             KeyCode::Char('a') => self.show_explorer = true,
             KeyCode::Char('d') => self.remove_selected_config(),
+            KeyCode::Char('r') => self.init_rename_dialog(),
             KeyCode::Enter => self.toggle_connection(),
             _ => {}
         }
@@ -111,6 +118,32 @@ impl App {
             }
             KeyCode::Esc => {
                 self.show_auth_popup = false;
+                self.input_buffer.clear();
+            }
+            KeyCode::Char(c) => {
+                self.input_buffer.push(c);
+            }
+            KeyCode::Backspace => {
+                self.input_buffer.pop();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_rename_key_event(&mut self, key_event: KeyEvent) {
+        match key_event.code {
+            KeyCode::Enter => {
+                let new_name = self.input_buffer.clone();
+                self.input_buffer.clear();
+                self.show_rename_popup = false;
+
+                if let Some(old_name) = self.rename_old_name.take() {
+                    self.rename_selected_config(&old_name, &new_name);
+                }
+            }
+            KeyCode::Esc => {
+                self.show_rename_popup = false;
+                self.rename_old_name = None;
                 self.input_buffer.clear();
             }
             KeyCode::Char(c) => {
@@ -221,6 +254,36 @@ impl App {
                     Some(index.min(self.servers.len() - 1))
                 };
                 self.list_state.select(new_selected);
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Error: {}", e));
+            }
+        }
+    }
+
+    fn init_rename_dialog(&mut self) {
+        let Some(index) = self.list_state.selected() else {
+            return;
+        };
+        let Some(server) = self.servers.get(index) else {
+            return;
+        };
+
+        self.rename_old_name = Some(server.name.clone());
+        self.input_buffer.clear();
+        self.show_rename_popup = true;
+    }
+
+    fn rename_selected_config(&mut self, old_name: &str, new_name: &str) {
+        if new_name.is_empty() {
+            self.status_message = Some("Name cannot be empty".to_string());
+            return;
+        }
+
+        match VpnManager::rename_config(old_name, new_name) {
+            Ok(_) => {
+                self.servers = VpnManager::load_servers();
+                self.status_message = Some(format!("Renamed '{}' to '{}'", old_name, new_name));
             }
             Err(e) => {
                 self.status_message = Some(format!("Error: {}", e));
